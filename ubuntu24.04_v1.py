@@ -1,3 +1,12 @@
+"""
+This script serves to create a golden image for a nextcloud installation.
+It is based on the instructions of https://www.youtube.com/watch?v=r--pQtwQMv0
+("Make Nextcloud fast! Full tutorial and server setup!")
+
+However, that video is for Ubuntu 22.04 and this script is for Ubuntu 24.04.
+It also incorporates some customization (e.g. starship and mc to simplify debugging)
+"""
+
 import time
 import os
 import sys
@@ -23,14 +32,6 @@ try:
 except ImportError as err:
     print("You need to install the package `deploymentutils` to run this script.")
 
-
-"""
-This script serves to create a golden image for a nextcloud installation.
-It is based on the instructions of https://www.youtube.com/watch?v=r--pQtwQMv0
-("Make Nextcloud fast! Full tutorial and server setup!")
-
-However, that video is for Ubuntu 22.04 and this script is for Ubuntu 24.04.
-"""
 
 # call this before running the script:
 # eval $(ssh-agent); ssh-add -t 10m
@@ -58,37 +59,14 @@ project_src_path = os.path.dirname(du.get_dir_of_this_file())
 
 temp_workdir = pjoin(du.get_dir_of_this_file(), "tmp_workdir")  # this will be deleted/overwritten
 
-# TODO: adapt if needed
-# assert os.path.isfile(os.path.join(project_src_path, "manage.py"))
-
-
-du.argparser.add_argument(
-    "--debug", help="start debug interactive mode (IPS), then exit", action="store_true"
-)
-
-# always pass remote as argument (reason: legacy)
-# TODO: adapt deployment tools such that this is not needed
-
-# assumes call starts with with `python deployment/deploy.py`
-args = du.parse_args(sys.argv[1:] + ["remote"])
-
-
-final_msg = f"Deployment script {du.bgreen('done')}."
-
-if not args.target == "remote":
-    raise NotImplementedError("local deployment is not supported by this script")
-
-time.sleep(1)
-
-
 # ensure clean workdir
 os.system(f"rm -rf {temp_workdir}")
 os.makedirs(temp_workdir)
 
-c = du.StateConnection(remote, user=user, target=args.target)
+c = du.StateConnection(remote, user=user, target="remote")
 
 c.run(f"echo hello new vm with os:")
-# get name of linux distribution
+# get name of Linux distribution
 res = c.run(f"lsb_release -a")
 
 
@@ -257,15 +235,34 @@ def nc_prep03(c: du.StateConnection):
     for cmd in sql_commands:
         c.run(f"mysql --execute \"{cmd}\"")
 
+def download_and_unzip_nc(c: du.StateConnection):
 
-# this is needed when run nc prep from scratch because it is missing in my test-image
-if 0:
+    c.chdir("/var/www")
+    c.run(f"wget {config('nc_release_file_url')}")
+
+    # unpack tar.bz2 file
+    c.run("tar xjf nextcloud*.tar.bz2")
+    c.run("chown -R www-data:www-data /var/www/nextcloud")
+
+    # disable default apache2 demo page
+    c.run("a2dissite 000-default.conf")
+    c.run("a2ensite nextcloud.conf")
+
+    c.run("systemctl restart apache2")
+    c.run("systemctl restart memcached")
+    c.run(f"systemctl restart php{PHP_VERSION}-fpm")
+
+if 1:
+    # this is needed when run nc prep from scratch because it is missing in my test-image
     c.run(f"apt install --assume-yes rsync")
     c.run(f"mkdir -p ~/.config/mc")
     c.rsync_upload("config_files/mc/", "~/.config/mc", "remote")
 
+    # this is the actual nextcloud installation:
     nc_prep01(c)
     nc_prep02(c)
-nc_prep03(c)
-exit()
-# IPS()
+    nc_prep03(c)
+    download_and_unzip_nc(c)
+
+    # at this point the tutorial video continues via browser
+    # we need to automate this (probably using `sudo -u www-data php /var/www/nextcloud/occ ...`)
