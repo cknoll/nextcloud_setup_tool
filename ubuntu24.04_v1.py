@@ -242,13 +242,30 @@ def nc_prep02(c: du.StateConnection):
     c.multi_edit_file(php_ini_fpath, replacements)
 
 
-# this is needed because it is missing in my test-image
-c.run(f"apt install --assume-yes rsync")
-c.run(f"mkdir -p ~/.config/mc")
-c.rsync_upload("config_files/mc/", "~/.config/mc", "remote")
+def nc_prep03(c: du.StateConnection):
 
+    user = config("sql_user")
+    password = config("sql_password")
+
+    sql_commands = [
+        f"CREATE USER '{user}'@'localhost' IDENTIFIED BY '{password}';",
+        f"CREATE DATABASE IF NOT EXISTS nextcloud CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;",
+        f"GRANT ALL PRIVILEGES ON nextcloud.* TO '{config('sql_user')}'@'localhost';",
+        "FLUSH PRIVILEGES;",
+    ]
+
+    for cmd in sql_commands:
+        c.run(f"mysql --execute \"{cmd}\"")
+
+
+# this is needed when run nc prep from scratch because it is missing in my test-image
+if 0:
+    c.run(f"apt install --assume-yes rsync")
+    c.run(f"mkdir -p ~/.config/mc")
+    c.rsync_upload("config_files/mc/", "~/.config/mc", "remote")
+
+    nc_prep01(c)
+    nc_prep02(c)
+nc_prep03(c)
 exit()
-
-nc_prep01(c)
-nc_prep02(c)
 # IPS()
