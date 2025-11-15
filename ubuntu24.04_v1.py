@@ -3,6 +3,7 @@ import os
 import sys
 import os
 from os.path import join as pjoin
+from textwrap import dedent
 
 from packaging import version
 from ipydex import IPS, activate_ips_on_exception
@@ -24,7 +25,11 @@ except ImportError as err:
 
 
 """
-This script serves to create a golden image for a nextcloud installation
+This script serves to create a golden image for a nextcloud installation.
+It is based on the instructions of https://www.youtube.com/watch?v=r--pQtwQMv0
+("Make Nextcloud fast! Full tutorial and server setup!")
+
+However, that video is for Ubuntu 22.04 and this script is for Ubuntu 24.04.
 """
 
 # call this before running the script:
@@ -44,6 +49,8 @@ user = config("user")
 
 # -------------------------- Begin Optional Config section -------------------------
 # if you know what you are doing you can adapt these settings to your needs
+
+PHP_VERSION = "8.3"
 
 # this is the root dir of the project (where setup.py lies)
 # if you maintain more than one instance (and deploy.py lives outside the project dir, this has to change)
@@ -120,4 +127,110 @@ def install_starship_tmux_mc(c: du.StateConnection):
     c.rsync_upload("config_files/mc/", "~/.config/mc", "remote")
 
 
-IPS()
+def nc_prep01(c: du.StateConnection):
+    c.run("apt install --assume-yes curl wget gnupg2 lsb-release ca-certificates")
+    c.run("apt install --assume-yes apache2")
+    c.run("apt install --assume-yes imagemagick memcached libmemcached-tools mariadb-server unzip smbclient")
+    php_modules = "{cli,common,curl,gd,mbstring,xml,zip,intl,gmp,bcmath,mysql,imagick,memcached,apcu}"
+    c.run(f"apt install --assume-yes php{PHP_VERSION}-fpm php{PHP_VERSION}-{php_modules}")
+
+def nc_prep02(c: du.StateConnection):
+    c.run(f"a2enconf php{PHP_VERSION}-fpm")
+
+    content = dedent(f"""
+    <VirtualHost *:80>
+            Protocols h2 h2c http/1.1
+            ServerName {config("server_name")}
+            DocumentRoot /var/www/nextcloud
+
+            <IfModule mod_headers.c>
+            Header always set Strict-Transport-Security "max-age=15552000; includeSubDomains"
+            </IfModule>
+
+            <FilesMatch \.php$>
+            SetHandler "proxy:unix:/var/run/php/php{PHP_VERSION}-fpm.sock|fcgi://localhost"
+            </FilesMatch>
+
+            <Directory /var/www/nextcloud/>
+                    Satisfy Any
+                    Require all granted
+                    Options FollowSymlinks MultiViews
+                    AllowOverride All
+                    <IfModule mod_dav.c>
+                            Dav off
+                    </IfModule>
+            </Directory>
+
+            ErrorLog /var/log/apache2/nextcloud-error.log
+            CustomLog /var/log/apache2/nextcloud-access.log common
+    </VirtualHost>
+    """)
+
+    c.string_to_file(content, "/etc/apache2/sites-available/nextcloud.conf", mode=">")
+
+    # enable and disable relevant apache2 modules
+    c.run(
+        "sudo a2enmod headers rewrite mpm_event http2 mime proxy proxy_fcgi "
+        "setenvif alias dir env ssl proxy_http proxy_wstunnel"
+    )
+    c.run("sudo a2dismod mpm_prefork")
+    c.run("sudo a2ensite nextcloud.conf")
+
+    # increase memcached memory (see config file)
+    old = dedent("""
+    # Note that the daemon will grow to this size, but does not start out holding this much
+    # memory
+    -m 64
+    """).lstrip("\n")
+    new = dedent(f"""
+    # Note that the daemon will grow to this size, but does not start out holding this much
+    # memory
+    -m {config("memcached_memory")}
+    """).lstrip("\n")
+
+
+    pool_conf_fpath = f"/etc/php/{PHP_VERSION}/fpm/pool.d/www.conf"
+    if 0:
+        c.edit_file("/etc/memcached.conf", old, new)
+
+
+        c.edit_file(pool_conf_fpath, "max_children = 5", "max_children = 80")
+        c.edit_file(pool_conf_fpath, "start_servers = 2", "start_servers = 20")
+        c.edit_file(pool_conf_fpath, "min_spare_servers = 1", "min_spare_servers = 20")
+        c.edit_file(pool_conf_fpath, "max_spare_servers = 3", "max_spare_servers = 60")
+
+    c.edit_file(pool_conf_fpath, ";env[HOSTNAME] = $HOSTNAME", "env[HOSTNAME] = $HOSTNAME")
+    c.edit_file(
+        pool_conf_fpath,
+        ";env[PATH] = /usr/local/bin:/usr/bin:/bin",
+        "env[PATH] = /usr/local/bin:/usr/bin:/bin",
+    )
+    c.edit_file(pool_conf_fpath, ";env[TMP] = /tmp", "env[TMP] = /tmp")
+    c.edit_file(pool_conf_fpath, ";env[TMPDIR] = /tmp", "env[TMPDIR] = /tmp")
+    c.edit_file(pool_conf_fpath, ";env[TEMP] = /tmp", "env[TEMP] = /tmp")
+
+
+    php_ini_fpath = f"/etc/php/{PHP_VERSION}/fpm/php.ini"
+
+    c.edit_file(php_ini_fpath, "memory_limit = 128M", "memory_limit = 1024M")
+    c.edit_file(php_ini_fpath, "post_max_size = 8M", "post_max_size = 512M")
+    c.edit_file(php_ini_fpath, "upload_max_filesize = 2M", "upload_max_filesize = 1024M")
+    c.edit_file(php_ini_fpath, ";opcache.enable=1", "opcache.enable=1")
+    c.edit_file(php_ini_fpath, ";opcache.memory_consumption=128", "opcache.memory_consumption=1024")
+    c.edit_file(php_ini_fpath, ";opcache.interned_strings_buffer=8", "opcache.interned_strings_buffer=64")
+    c.edit_file(php_ini_fpath, ";opcache.max_accelerated_files=10000", "opcache.max_accelerated_files=150000")
+    c.edit_file(php_ini_fpath, ";opcache.max_wasted_percentage=5", "opcache.max_wasted_percentage=15")
+    c.edit_file(php_ini_fpath, ";opcache.revalidate_freq=2", "opcache.revalidate_freq=60")
+    c.edit_file(php_ini_fpath, ";opcache.save_comments=1", "opcache.save_comments=1")
+
+    # this is not present in the default config
+    "", "opcache.jit=1255"
+    "", "opcache.jit_buffer_size=256M"
+
+    # TODO: multi_edit_file
+
+    IPS()
+
+# nc_prep01(c)
+nc_prep02(c)
+# IPS()
