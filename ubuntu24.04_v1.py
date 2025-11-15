@@ -123,6 +123,7 @@ def install_starship_tmux_mc(c: du.StateConnection):
 
     # midnight commander with lynx like motion
     c.run(f"apt install --assume-yes mc")
+    c.run(f"mkdir -p ~/.config/mc")
     # trailing slash at source is important
     c.rsync_upload("config_files/mc/", "~/.config/mc", "remote")
 
@@ -133,6 +134,7 @@ def nc_prep01(c: du.StateConnection):
     c.run("apt install --assume-yes imagemagick memcached libmemcached-tools mariadb-server unzip smbclient")
     php_modules = "{cli,common,curl,gd,mbstring,xml,zip,intl,gmp,bcmath,mysql,imagick,memcached,apcu}"
     c.run(f"apt install --assume-yes php{PHP_VERSION}-fpm php{PHP_VERSION}-{php_modules}")
+
 
 def nc_prep02(c: du.StateConnection):
     c.run(f"a2enconf php{PHP_VERSION}-fpm")
@@ -180,57 +182,73 @@ def nc_prep02(c: du.StateConnection):
     old = dedent("""
     # Note that the daemon will grow to this size, but does not start out holding this much
     # memory
-    -m 64
+
     """).lstrip("\n")
     new = dedent(f"""
     # Note that the daemon will grow to this size, but does not start out holding this much
     # memory
-    -m {config("memcached_memory")}
+
     """).lstrip("\n")
 
+    c.multi_edit_file("/etc/memcached.conf", [("-m 64", f"-m {config('memcached_memory')}")])
 
     pool_conf_fpath = f"/etc/php/{PHP_VERSION}/fpm/pool.d/www.conf"
-    if 0:
-        c.edit_file("/etc/memcached.conf", old, new)
+    replacements = [
+        ("max_children = 5", "max_children = 80"),
+        ("start_servers = 2", "start_servers = 20"),
+        ("min_spare_servers = 1", "min_spare_servers = 20"),
+        ("max_spare_servers = 3", "max_spare_servers = 60"),
 
-
-        c.edit_file(pool_conf_fpath, "max_children = 5", "max_children = 80")
-        c.edit_file(pool_conf_fpath, "start_servers = 2", "start_servers = 20")
-        c.edit_file(pool_conf_fpath, "min_spare_servers = 1", "min_spare_servers = 20")
-        c.edit_file(pool_conf_fpath, "max_spare_servers = 3", "max_spare_servers = 60")
-
-    c.edit_file(pool_conf_fpath, ";env[HOSTNAME] = $HOSTNAME", "env[HOSTNAME] = $HOSTNAME")
-    c.edit_file(
-        pool_conf_fpath,
-        ";env[PATH] = /usr/local/bin:/usr/bin:/bin",
-        "env[PATH] = /usr/local/bin:/usr/bin:/bin",
-    )
-    c.edit_file(pool_conf_fpath, ";env[TMP] = /tmp", "env[TMP] = /tmp")
-    c.edit_file(pool_conf_fpath, ";env[TMPDIR] = /tmp", "env[TMPDIR] = /tmp")
-    c.edit_file(pool_conf_fpath, ";env[TEMP] = /tmp", "env[TEMP] = /tmp")
-
+        (";env[HOSTNAME] = $HOSTNAME", "env[HOSTNAME] = $HOSTNAME"),
+        (";env[PATH] = /usr/local/bin:/usr/bin:/bin", "env[PATH] = /usr/local/bin:/usr/bin:/bin",),
+        (";env[TMP] = /tmp", "env[TMP] = /tmp"),
+        (";env[TMPDIR] = /tmp", "env[TMPDIR] = /tmp"),
+        (";env[TEMP] = /tmp", "env[TEMP] = /tmp"),
+    ]
+    c.multi_edit_file(pool_conf_fpath, replacements)
 
     php_ini_fpath = f"/etc/php/{PHP_VERSION}/fpm/php.ini"
+    replacements = [
+        ("memory_limit = 128M", "memory_limit = 1024M"),
+        ("post_max_size = 8M", "post_max_size = 512M"),
+        ("upload_max_filesize = 2M", "upload_max_filesize = 1024M"),
+        (";opcache.enable=1", "opcache.enable=1"),
+        (";opcache.memory_consumption=128", "opcache.memory_consumption=1024"),
+        (";opcache.interned_strings_buffer=8", "opcache.interned_strings_buffer=64"),
+        (";opcache.max_accelerated_files=10000", "opcache.max_accelerated_files=150000"),
+        (";opcache.max_wasted_percentage=5", "opcache.max_wasted_percentage=15"),
+        (";opcache.revalidate_freq=2", "opcache.revalidate_freq=60"),
+        (";opcache.save_comments=1", "opcache.save_comments=1"),
+    ]
 
-    c.edit_file(php_ini_fpath, "memory_limit = 128M", "memory_limit = 1024M")
-    c.edit_file(php_ini_fpath, "post_max_size = 8M", "post_max_size = 512M")
-    c.edit_file(php_ini_fpath, "upload_max_filesize = 2M", "upload_max_filesize = 1024M")
-    c.edit_file(php_ini_fpath, ";opcache.enable=1", "opcache.enable=1")
-    c.edit_file(php_ini_fpath, ";opcache.memory_consumption=128", "opcache.memory_consumption=1024")
-    c.edit_file(php_ini_fpath, ";opcache.interned_strings_buffer=8", "opcache.interned_strings_buffer=64")
-    c.edit_file(php_ini_fpath, ";opcache.max_accelerated_files=10000", "opcache.max_accelerated_files=150000")
-    c.edit_file(php_ini_fpath, ";opcache.max_wasted_percentage=5", "opcache.max_wasted_percentage=15")
-    c.edit_file(php_ini_fpath, ";opcache.revalidate_freq=2", "opcache.revalidate_freq=60")
-    c.edit_file(php_ini_fpath, ";opcache.save_comments=1", "opcache.save_comments=1")
+    # add special instructions at the end of the section (no commented template available)
+    # note that [curl] starts the next section
 
-    # this is not present in the default config
-    "", "opcache.jit=1255"
-    "", "opcache.jit_buffer_size=256M"
+    old = dedent("""
+    ;opcache.lockfile_path=/tmp
 
-    # TODO: multi_edit_file
+    [curl]
+    """).lstrip("\n")
+    new = dedent(f"""
+    ;opcache.lockfile_path=/tmp
 
-    IPS()
+    opcache.jit=1255
+    opcache.jit_buffer_size=256M
 
-# nc_prep01(c)
+    [curl]
+    """).lstrip("\n")
+
+    replacements.append((old, new))
+    c.multi_edit_file(php_ini_fpath, replacements)
+
+
+# this is needed because it is missing in my test-image
+c.run(f"apt install --assume-yes rsync")
+c.run(f"mkdir -p ~/.config/mc")
+c.rsync_upload("config_files/mc/", "~/.config/mc", "remote")
+
+exit()
+
+nc_prep01(c)
 nc_prep02(c)
 # IPS()
