@@ -252,7 +252,43 @@ def download_and_unzip_nc(c: du.StateConnection):
     c.run("systemctl restart memcached")
     c.run(f"systemctl restart php{PHP_VERSION}-fpm")
 
-if 1:
+
+def initial_nc_config(c):
+
+    occ_base_cmd = "sudo -u www-data php /var/www/nextcloud/occ"
+    cmd1 = dedent(f"""
+    {occ_base_cmd} maintenance:install \
+    --database "mysql" \
+    --database-name "nextcloud" \
+    --database-user "{config("sql_user")}" \
+    --database-pass "{config("sql_password")}" \
+    --admin-user "{config("nc_admin_user")}" \
+    --admin-pass "{config("nc_admin_pw")}" \
+    --data-dir "/var/www/nextcloud/data"
+    """)
+    c.run(cmd1)
+    cmd2 = f'{occ_base_cmd} config:system:set trusted_domains 1 --value="{config("server_name")}"'
+    c.run(cmd2)
+
+    # this url will be used e.g. in automatically generated emails
+    cmd3 = f'{occ_base_cmd} config:system:set overwrite.cli.url --value="https://{config("server_name")}"'
+
+    c.run(cmd3)
+
+    # activate memcache (recommendation from the video)
+    pairs = [
+        ("memcache.local", r"\OC\Memcache\APCu"),
+        ("memcache.distributed", r"\OC\Memcache\Memcached"),
+        ("memcache.locking", r"\OC\Memcache\Memcached"),
+    ]
+    for varname, value in pairs:
+        # note that if you edit the config file (display it with `cat config.php`) the backslashes appear
+        # doubled (e.g. "\\OC\\Memcache\\Memcached" representing "\OC\Memcache\Memcached")
+        cmd4 = f"{occ_base_cmd} config:system:set {varname} --value='{value}'"
+        c.run(cmd4)
+
+
+if 0:
     # this is needed when run nc prep from scratch because it is missing in my test-image
     c.run(f"apt install --assume-yes rsync")
     c.run(f"mkdir -p ~/.config/mc")
@@ -265,4 +301,7 @@ if 1:
     download_and_unzip_nc(c)
 
     # at this point the tutorial video continues via browser
-    # we need to automate this (probably using `sudo -u www-data php /var/www/nextcloud/occ ...`)
+    # we need to automate this (using `sudo -u www-data php /var/www/nextcloud/occ ...`)
+    initial_nc_config(c)
+
+IPS()
