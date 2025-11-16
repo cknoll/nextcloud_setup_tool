@@ -1,0 +1,27 @@
+# #############################################################################
+# general settings (no action necessary)
+# #############################################################################
+
+# valid values are "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"
+LOGLEVEL = "INFO"
+
+
+# #############################################################################
+# deployment settings which needs to be changed
+# #############################################################################
+
+
+remote = '123.45.67.89'
+user = 'some_user'
+
+server_name = 'v1234567890.bestsrv.de'
+memcached_memory = 512
+
+nc_admin_user = "admin"
+nc_admin_pw = 'dS9BWDo_examlpe_gKydKZkrbVANX'
+
+
+sql_user = 'example_user'
+sql_password = 'QUw6ViAZl_example_0tmFm5sH0Tr'
+
+nc_release_file_url = "https://download.nextcloud.com/server/releases/nextcloud-32.0.1.tar.bz2"

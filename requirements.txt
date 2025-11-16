@@ -1,4 +1,4 @@
 packaging>=20.4
-deploymentutils>=0.0.4
+deploymentutils>=0.11.1
 demjson3
 ipydex
