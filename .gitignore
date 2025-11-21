@@ -27,3 +27,10 @@ tmp_*
 *.tex.backup
 *.clo
 *.idx
+
+
+# shelve files
+
+*.db.bak
+*.db.dat
+*.db.dir
