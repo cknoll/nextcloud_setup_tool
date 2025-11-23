@@ -254,7 +254,7 @@ def prepare01(c: du.StateConnection):
     """)
     c.string_to_file(postgres_config, "~/postgres.yaml", mode=">")
     c.run("kubectl apply -f postgres.yaml")
-    c.run("echo 'THE FOLLOWING MIGHT TAKE SOME MINUTES' && kubectl get pods -n mattermost -w")
+    c.run("kubectl get pods -n mattermost")
 
     # Part 8: Deploy Mattermost
     MM_SQLSETTINGS_DATASOURCE = "postgres://mattermost:YourSecurePassword123!@postgres:5432/mattermost?sslmode=disable&connect_timeout=10"
@@ -361,10 +361,10 @@ def prepare01(c: du.StateConnection):
       ingressClassName: nginx
       tls:
       - hosts:
-        - {config('mattermost::site_url')}  # Change this!
+        - "{config('mattermost::site_url').lstrip('https://')}"  # Change this!
         secretName: mattermost-tls
       rules:
-      - host: {config('mattermost::site_url')}  # Change this!
+      - host: "{config('mattermost::site_url').lstrip('https://')}"  # Change this!
         http:
           paths:
           - path: /
@@ -387,6 +387,12 @@ def prepare01(c: du.StateConnection):
     # 10.2 Check Logs if Needed
 
     c.run("kubectl logs -n mattermost deployment/mattermost")
+
+    # TODO-AIDER: I get this error:
+    # Error: failed to initialize platform: cannot create store: error setting up connections: pq: password authentication failed for user "mattermost"
+    # how can I debug it?
+
+
     c.run("kubectl logs -n mattermost deployment/postgres")
 
     # 10.3 Access Mattermost
