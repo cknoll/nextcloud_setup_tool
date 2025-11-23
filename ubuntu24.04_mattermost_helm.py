@@ -108,10 +108,13 @@ def prepare01(c: du.StateConnection):
     c.run("helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx")
     c.run("helm repo update")
 
-    # TODO-AIDER: the following command fails with error:
-    # INSTALLATION FAILED: Kubernetes cluster unreachable: Get "http://localhost:8080/version": dial tcp [::1]:8080: connect: connection refused
-    # please suggest a fix the problem directly or – if you do not know why it happened – add commands to clarify the situation
-    c.run("""helm install ingress-nginx ingress-nginx/ingress-nginx \\
+    # Verify kubectl configuration before running helm
+    c.run("echo 'Current KUBECONFIG:' && echo $KUBECONFIG")
+    c.run("kubectl config current-context")
+    c.run("kubectl cluster-info")
+    
+    # Ensure KUBECONFIG is set for this command
+    c.run("""export KUBECONFIG=~/.kube/config && helm install ingress-nginx ingress-nginx/ingress-nginx \\
         --namespace ingress-nginx \\
         --create-namespace \\
         --set controller.service.type=LoadBalancer""")
