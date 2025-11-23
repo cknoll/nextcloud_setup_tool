@@ -34,3 +34,8 @@ tmp_*
 *.db.bak
 *.db.dat
 *.db.dir
+
+# yaml file to temporarily paste yaml content from external source, to adapt indentation in steps of 2 spaces.
+# VS code uses four spaces inside python files, even within multiline strings
+
+tmp.yaml
