@@ -83,7 +83,6 @@ def prepare01(c: du.StateConnection):
     c.run("sudo swapoff -a")
     c.run("sudo sed -i '/ swap / s/^/#/' /etc/fstab")
 
-
     c.run("""curl -sfL https://get.k3s.io | sh -s - \\
         --write-kubeconfig-mode 644 \\
         --disable traefik""")
@@ -108,17 +107,18 @@ def prepare01(c: du.StateConnection):
     c.run("helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx")
     c.run("helm repo update")
 
-    # Verify kubectl configuration before running helm
+    # Verify kubectl configuration before running helm (NEW!!)
     c.run("echo 'Current KUBECONFIG:' && echo $KUBECONFIG")
     c.run("kubectl config current-context")
     c.run("kubectl cluster-info")
-    
-    # Ensure KUBECONFIG is set for this command
-    c.run("""export KUBECONFIG=~/.kube/config && helm install ingress-nginx ingress-nginx/ingress-nginx \\
-        --namespace ingress-nginx \\
-        --create-namespace \\
-        --set controller.service.type=LoadBalancer""")
 
+    # if the following was already run use `helm -n ingress-nginx delete ingress-nginx` to undo it
+    c.run(
+        "helm install ingress-nginx ingress-nginx/ingress-nginx "
+        "--namespace ingress-nginx "
+        "--create-namespace "
+        "--set controller.service.type=LoadBalancer"
+    )
 
     c.run("kubectl get pods -n ingress-nginx")
     c.run("kubectl get svc -n ingress-nginx")
@@ -126,10 +126,12 @@ def prepare01(c: du.StateConnection):
     # Install cert-manager (For HTTPS)
     c.run("helm repo add jetstack https://charts.jetstack.io")
     c.run("helm repo update")
-    c.run("""helm install cert-manager jetstack/cert-manager \\
-        --namespace cert-manager \\
-        --create-namespace \\
-        --set crds.enabled=true""")
+    c.run(
+        "helm install cert-manager jetstack/cert-manager "
+        "--namespace cert-manager "
+        "--create-namespace "
+        "--set crds.enabled=true"
+    )
 
     cluster_issuer = dedent(f"""
     apiVersion: cert-manager.io/v1
@@ -252,7 +254,7 @@ def prepare01(c: du.StateConnection):
     """)
     c.string_to_file(postgres_config, "~/postgres.yaml", mode=">")
     c.run("kubectl apply -f postgres.yaml")
-    c.run("kubectl get pods -n mattermost -w")
+    c.run("echo 'THE FOLLOWING MIGHT TAKE SOME MINUTES' && kubectl get pods -n mattermost -w")
 
     # Part 8: Deploy Mattermost
     MM_SQLSETTINGS_DATASOURCE = "postgres://mattermost:YourSecurePassword123!@postgres:5432/mattermost?sslmode=disable&connect_timeout=10"
@@ -383,7 +385,6 @@ def prepare01(c: du.StateConnection):
     c.run("kubectl get certificate -n mattermost")
 
     # 10.2 Check Logs if Needed
-
 
     c.run("kubectl logs -n mattermost deployment/mattermost")
     c.run("kubectl logs -n mattermost deployment/postgres")
