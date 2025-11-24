@@ -65,6 +65,19 @@ c.run(f"echo hello new vm with os:")
 res = c.run(f"lsb_release -a")
 
 
+
+# ssh key handling:
+
+# remove from known_hosts:
+# f"ssh-keygen -R {config("remote")}"
+
+# add keys
+# f"ssh-keyscan {config("remote")} >> ~/.ssh/known_hosts"
+# f"ssh-keyscan -t ed25519 {config("remote")} >> ~/.ssh/known_hosts"
+
+
+
+
 def install_starship_tmux_mc(c: du.StateConnection):
     """
     Install some tools which are not strictly necessary, but significantly simplify interactive debugging
@@ -72,7 +85,9 @@ def install_starship_tmux_mc(c: du.StateConnection):
     c.run(f"mkdir -p ~/tmp")
     c.run(f"mkdir -p ~/bin")
     c.chdir("~/tmp")
-    #c.run(f"curl  https://starship.rs/install.sh > install_starship.sh")
+
+    if not c.check_existence("install_starship.sh"):
+        c.run(f"curl  https://starship.rs/install.sh > install_starship.sh")
     c.run(f"sh install_starship.sh --bin-dir ~/bin --yes")
 
 
@@ -91,6 +106,7 @@ def install_starship_tmux_mc(c: du.StateConnection):
     eval "$(~/bin/starship init bash)"
     """
 
+    c.chdir("~/")
 
     c.string_to_file(bashrc_content, "~/.bashrc", mode=">>")
 
@@ -104,6 +120,9 @@ def install_starship_tmux_mc(c: du.StateConnection):
     c.rsync_upload("config_files/mc/", "~/.config/mc", "remote")
 
 def install_mattermost_with_helm(c: du.StateConnection):
+
+    # ensure that we have left possible subdirectories
+    c.dir = None
     c.run("sudo apt update && sudo apt upgrade -y")
     c.run("sudo apt install -y curl wget git apt-transport-https ca-certificates ufw")
 
@@ -150,7 +169,8 @@ def install_mattermost_with_helm(c: du.StateConnection):
     c.run("kubectl config current-context")
     c.run("kubectl cluster-info")
 
-    # if the following was already run use `helm -n ingress-nginx delete ingress-nginx` to undo it
+    # delete ingress-nginx if already installed (from previous run)
+    res = c.run("helm -n ingress-nginx delete ingress-nginx", warn=False, hide=True)
     c.run(
         "helm install ingress-nginx ingress-nginx/ingress-nginx "
         "--namespace ingress-nginx "
@@ -164,6 +184,9 @@ def install_mattermost_with_helm(c: du.StateConnection):
     # Install cert-manager (For HTTPS)
     c.run("helm repo add jetstack https://charts.jetstack.io")
     c.run("helm repo update")
+
+    # delete cert-manager if already installed
+    res = c.run("helm -n cert-manager delete cert-manager", warn=False, hide=True)
     c.run(
         "helm install cert-manager jetstack/cert-manager "
         "--namespace cert-manager "
