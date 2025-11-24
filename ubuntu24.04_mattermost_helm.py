@@ -65,9 +65,47 @@ c.run(f"echo hello new vm with os:")
 res = c.run(f"lsb_release -a")
 
 
-def prepare01(c: du.StateConnection):
+def install_starship_tmux_mc(c: du.StateConnection):
+    """
+    Install some tools which are not strictly necessary, but significantly simplify interactive debugging
+    """
+    c.run(f"mkdir -p ~/tmp")
+    c.run(f"mkdir -p ~/bin")
+    c.chdir("~/tmp")
+    #c.run(f"curl  https://starship.rs/install.sh > install_starship.sh")
+    c.run(f"sh install_starship.sh --bin-dir ~/bin --yes")
+
+
+    bashrc_content = \
+    r"""
+    # make bash autocomplete with up/down arrow if in interactive mode
+    if [ -t 1 ]
+    then
+        bind '"\e[A":history-search-backward'
+        bind '"\e[B":history-search-forward'
+    fi
+
+    export EDITOR=mcedit
+    export VISUAL=mcedit
+
+    eval "$(~/bin/starship init bash)"
+    """
+
+
+    c.string_to_file(bashrc_content, "~/.bashrc", mode=">>")
+
+    c.run(f"sudo apt update && sudo apt upgrade -y")
+    c.run(f"apt install --assume-yes tmux rsync")
+
+    # midnight commander with lynx like motion
+    c.run(f"apt install --assume-yes mc")
+    c.run(f"mkdir -p ~/.config/mc")
+    # trailing slash at source is important
+    c.rsync_upload("config_files/mc/", "~/.config/mc", "remote")
+
+def install_mattermost_with_helm(c: du.StateConnection):
     c.run("sudo apt update && sudo apt upgrade -y")
-    c.run("sudo apt install -y curl wget git apt-transport-https ca-certificates")
+    c.run("sudo apt install -y curl wget git apt-transport-https ca-certificates ufw")
 
     # firewall
     c.run("sudo ufw allow 22/tcp")  # ssh
@@ -75,8 +113,8 @@ def prepare01(c: du.StateConnection):
     c.run("sudo ufw allow 443/tcp")  # https
     c.run("sudo ufw allow 6443/tcp")  # kubernetes api
 
-    # TODO: this asks for confirmation
-    c.run("sudo ufw enable")
+    # without --force this asks for confirmation
+    c.run("sudo ufw --force enable")
 
     # 1.3 Disable Swap (Required for Kubernetes)
 
@@ -395,7 +433,12 @@ def prepare01(c: du.StateConnection):
 
     # c.run("")
     # c.run("")
-    IPS()
 
-prepare01(c)
+    time.sleep(60)
+    print(f'Now you should be able to access the Mattermost UI at {config("mattermost::site_url").replace("https:", "http:")}')
+    # IPS()
+
+
+install_starship_tmux_mc(c)
+install_mattermost_with_helm(c)
 exit()
