@@ -448,7 +448,7 @@ def install_mattermost_with_helm(c: du.StateConnection):
                   number: 8065
     """)
     c.string_to_file(mattermost_ingress_config, "~/mattermost-ingress.yaml", mode=">")
-    
+
     # Check if certificate already exists to avoid unnecessary recreation
     cert_check = c.run("kubectl get certificate mattermost-tls -n mattermost", warn=True, hide=True)
     if cert_check.return_code == 0:
@@ -468,14 +468,84 @@ def install_mattermost_with_helm(c: du.StateConnection):
 
     c.run("kubectl logs -n mattermost deployment/postgres")
 
-    # 10.3 Access Mattermost
+    # 10.3 Wait for certificate to be ready and backup Let's Encrypt files
+    print("Waiting for certificate to be ready...")
+
+    # Wait up to 10 minutes for certificate to be ready
+    for i in range(60):  # 60 attempts, 10 seconds each = 10 minutes max
+        cert_status = c.run("kubectl get certificate mattermost-tls -n mattermost -o jsonpath='{.status.conditions[?(@.type==\"Ready\")].status}'", warn=True, hide=True)
+        if cert_status.stdout.strip() == "True":
+            print("Certificate is ready!")
+            break
+        print(f"Certificate not ready yet, waiting... (attempt {i+1}/60)")
+        time.sleep(10)
+    else:
+        print("Warning: Certificate may not be ready yet, but proceeding with backup attempt")
+
+    # Create local backup directory
+    backup_dir = "./lets_encrypt_backup"
+    os.makedirs(backup_dir, exist_ok=True)
+
+    # Download Let's Encrypt certificate files
+    print("Backing up Let's Encrypt certificates...")
+
+    # Get the secret name and download the TLS secret
+    c.run("kubectl get secret mattermost-tls -n mattermost -o yaml > ~/mattermost-tls-secret.yaml")
+    c.rsync_download("~/mattermost-tls-secret.yaml", f"{backup_dir}/mattermost-tls-secret.yaml", "remote")
+
+    # Download the Let's Encrypt account key and other cert-manager secrets
+    c.run("kubectl get secret letsencrypt-prod -n cert-manager -o yaml > ~/letsencrypt-prod-secret.yaml", warn=True)
+    c.rsync_download("~/letsencrypt-prod-secret.yaml", f"{backup_dir}/letsencrypt-prod-secret.yaml", "remote", warn=True)
+
+    # Download cluster issuer configuration
+    c.run("kubectl get clusterissuer letsencrypt-prod -o yaml > ~/letsencrypt-prod-clusterissuer.yaml")
+    c.rsync_download("~/letsencrypt-prod-clusterissuer.yaml", f"{backup_dir}/letsencrypt-prod-clusterissuer.yaml", "remote")
+
+    # Create a restore script for future use
+    restore_script = dedent(f"""#!/bin/bash
+    # Script to restore Let's Encrypt certificates
+    # Run this before applying the ingress configuration
+
+    echo "Restoring Let's Encrypt certificates..."
+
+    # Apply the cluster issuer first (tells cert-manager how to communicate with Let's Encrypt)
+    # Contains the ACME server URL, your email, and challenge solver configuration
+    # Does NOT trigger new certificate requests - it just sets up the issuer for future use
+
+    kubectl apply -f letsencrypt-prod-clusterissuer.yaml
+
+    # Wait a moment for cert-manager to be ready
+    sleep 5
+
+    # Apply the account secret
+    # (Restores the Let's Encrypt account private key)
+    # Critical for avoiding rate limits - without this, cert-manager would create a
+    # new account and potentially hit duplicate certificate limits
+
+    kubectl apply -f letsencrypt-prod-secret.yaml
+
+    # Apply the TLS secret
+    # Restores the actual TLS certificate and private key
+    # (the mattermost-tls secret in mattermost namespace)
+    # This contains the SSL certificate that nginx uses to serve HTTPS traffic
+    # Immediately enables HTTPS without waiting for certificate generation
+
+    kubectl apply -f mattermost-tls-secret.yaml
+
+    echo "Certificates restored. You can now apply your ingress configuration."
+    """)
+
+    with open(f"{backup_dir}/restore_certificates.sh", "w") as f:
+        f.write(restore_script)
+
+    print(f"Let's Encrypt certificates backed up to {backup_dir}/")
+    print(f"To restore certificates on a fresh installation, run: bash {backup_dir}/restore_certificates.sh")
+
+    # 10.4 Access Mattermost
     # Navigate to https://chat.yourdomain.com and create your admin account.
 
-    # c.run("")
-    # c.run("")
-
-    time.sleep(60)
-    print(f'Now you should be able to access the Mattermost UI at {config("mattermost::site_url").replace("https:", "http:")}')
+    time.sleep(10)
+    print(f'Now you should be able to access the Mattermost UI at {config("mattermost::site_url")}')
     # IPS()
 
 
