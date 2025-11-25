@@ -169,14 +169,17 @@ def install_mattermost_with_helm(c: du.StateConnection):
     c.run("kubectl config current-context")
     c.run("kubectl cluster-info")
 
-    # delete ingress-nginx if already installed (from previous run)
-    res = c.run("helm -n ingress-nginx delete ingress-nginx", warn=False, hide=True)
-    c.run(
-        "helm install ingress-nginx ingress-nginx/ingress-nginx "
-        "--namespace ingress-nginx "
-        "--create-namespace "
-        "--set controller.service.type=LoadBalancer"
-    )
+    # Check if ingress-nginx is already installed
+    helm_check = c.run("helm list -n ingress-nginx", warn=True, hide=True)
+    if "ingress-nginx" in helm_check.stdout:
+        print("ingress-nginx already installed, skipping installation")
+    else:
+        c.run(
+            "helm install ingress-nginx ingress-nginx/ingress-nginx "
+            "--namespace ingress-nginx "
+            "--create-namespace "
+            "--set controller.service.type=LoadBalancer"
+        )
 
     c.run("kubectl get pods -n ingress-nginx")
     c.run("kubectl get svc -n ingress-nginx")
@@ -185,14 +188,17 @@ def install_mattermost_with_helm(c: du.StateConnection):
     c.run("helm repo add jetstack https://charts.jetstack.io")
     c.run("helm repo update")
 
-    # delete cert-manager if already installed
-    res = c.run("helm -n cert-manager delete cert-manager", warn=False, hide=True)
-    c.run(
-        "helm install cert-manager jetstack/cert-manager "
-        "--namespace cert-manager "
-        "--create-namespace "
-        "--set crds.enabled=true"
-    )
+    # Check if cert-manager is already installed
+    cert_manager_check = c.run("helm list -n cert-manager", warn=True, hide=True)
+    if "cert-manager" in cert_manager_check.stdout:
+        print("cert-manager already installed, skipping installation")
+    else:
+        c.run(
+            "helm install cert-manager jetstack/cert-manager "
+            "--namespace cert-manager "
+            "--create-namespace "
+            "--set crds.enabled=true"
+        )
 
     cluster_issuer = dedent(f"""
     apiVersion: cert-manager.io/v1
@@ -214,7 +220,12 @@ def install_mattermost_with_helm(c: du.StateConnection):
     c.run("kubectl apply -f cluster-issuer.yaml")
 
     # Part 6: Create Mattermost Namespace & Storage
-    c.run("kubectl create namespace mattermost")
+    # Check if namespace exists
+    ns_check = c.run("kubectl get namespace mattermost", warn=True, hide=True)
+    if ns_check.return_code != 0:
+        c.run("kubectl create namespace mattermost")
+    else:
+        print("mattermost namespace already exists, skipping creation")
     mattermost_storage = dedent(f"""
     ---
     apiVersion: v1
@@ -422,10 +433,10 @@ def install_mattermost_with_helm(c: du.StateConnection):
       ingressClassName: nginx
       tls:
       - hosts:
-        - "{config('mattermost::site_url').lstrip('https://')}"  # Change this!
+        - "{config('mattermost::site_url').replace('https://', '').replace('http://', '')}"
         secretName: mattermost-tls
       rules:
-      - host: "{config('mattermost::site_url').lstrip('https://')}"  # Change this!
+      - host: "{config('mattermost::site_url').replace('https://', '').replace('http://', '')}"
         http:
           paths:
           - path: /
@@ -437,7 +448,13 @@ def install_mattermost_with_helm(c: du.StateConnection):
                   number: 8065
     """)
     c.string_to_file(mattermost_ingress_config, "~/mattermost-ingress.yaml", mode=">")
-    c.run("kubectl apply -f mattermost-ingress.yaml")
+    
+    # Check if certificate already exists to avoid unnecessary recreation
+    cert_check = c.run("kubectl get certificate mattermost-tls -n mattermost", warn=True, hide=True)
+    if cert_check.return_code == 0:
+        print("Certificate already exists, skipping ingress recreation to avoid Let's Encrypt rate limits")
+    else:
+        c.run("kubectl apply -f mattermost-ingress.yaml")
 
     # Part 10: Verify Deployment
 
