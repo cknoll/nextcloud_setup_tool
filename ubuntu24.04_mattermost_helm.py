@@ -202,7 +202,7 @@ def install_mattermost_with_helm(c: du.StateConnection):
     spec:
       acme:
         server: https://acme-v02.api.letsencrypt.org/directory
-        email: your-email@example.com  # Change this!
+        email: {config('mattermost::letsencrypt_email')}
         privateKeySecretRef:
           name: letsencrypt-prod
         solvers:
