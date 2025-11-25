@@ -197,24 +197,42 @@ def install_mattermost_with_helm(c: du.StateConnection):
             "--set crds.enabled=true"
         )
 
-    cluster_issuer = dedent(f"""
-    apiVersion: cert-manager.io/v1
-    kind: ClusterIssuer
-    metadata:
-      name: letsencrypt-prod
-    spec:
-      acme:
-        server: https://acme-v02.api.letsencrypt.org/directory
-        email: {config('mattermost::letsencrypt_email')}
-        privateKeySecretRef:
+    # Check if certificate backup exists locally and restore if available
+    backup_dir = "./lets_encrypt_backup"
+    if os.path.exists(backup_dir) and os.path.exists(f"{backup_dir}/mattermost-tls-secret.yaml"):
+        print("Found existing certificate backup, uploading and restoring...")
+        
+        # Upload backup files to remote
+        c.rsync_upload(f"{backup_dir}/", "~/lets_encrypt_backup/", "remote")
+        
+        # Restore certificates on remote machine
+        c.run("kubectl apply -f ~/lets_encrypt_backup/letsencrypt-prod-clusterissuer.yaml")
+        c.run("sleep 5")  # Wait for cert-manager to be ready
+        c.run("kubectl apply -f ~/lets_encrypt_backup/letsencrypt-prod-secret.yaml")
+        c.run("kubectl apply -f ~/lets_encrypt_backup/mattermost-tls-secret.yaml")
+        
+        print("Certificates restored from backup.")
+    else:
+        print("No certificate backup found, will generate new certificates...")
+        
+        cluster_issuer = dedent(f"""
+        apiVersion: cert-manager.io/v1
+        kind: ClusterIssuer
+        metadata:
           name: letsencrypt-prod
-        solvers:
-        - http01:
-            ingress:
-              class: nginx
-    """)
-    c.string_to_file(cluster_issuer, "~/cluster-issuer.yaml", mode=">")
-    c.run("kubectl apply -f cluster-issuer.yaml")
+        spec:
+          acme:
+            server: https://acme-v02.api.letsencrypt.org/directory
+            email: {config('mattermost::letsencrypt_email')}
+            privateKeySecretRef:
+              name: letsencrypt-prod
+            solvers:
+            - http01:
+                ingress:
+                  class: nginx
+        """)
+        c.string_to_file(cluster_issuer, "~/cluster-issuer.yaml", mode=">")
+        c.run("kubectl apply -f cluster-issuer.yaml")
 
     # Part 6: Create Mattermost Namespace & Storage
     # Check if namespace exists
@@ -446,12 +464,7 @@ def install_mattermost_with_helm(c: du.StateConnection):
     """)
     c.string_to_file(mattermost_ingress_config, "~/mattermost-ingress.yaml", mode=">")
 
-    # Check if certificate already exists to avoid unnecessary recreation
-    cert_check = c.run("kubectl get certificate mattermost-tls -n mattermost", warn=True, hide=True)
-    if cert_check.return_code == 0:
-        print("Certificate already exists, skipping ingress recreation to avoid Let's Encrypt rate limits")
-    else:
-        c.run("kubectl apply -f mattermost-ingress.yaml")
+    c.run("kubectl apply -f mattermost-ingress.yaml")
 
     # Part 10: Verify Deployment
 
@@ -465,92 +478,35 @@ def install_mattermost_with_helm(c: du.StateConnection):
 
     c.run("kubectl logs -n mattermost deployment/postgres")
 
-    # 10.3 Wait for certificate to be ready and backup Let's Encrypt files
-    print("Waiting for certificate to be ready...")
-
-    # Wait up to 10 minutes for certificate to be ready
-    for i in range(60):  # 60 attempts, 10 seconds each = 10 minutes max
-        cert_status = c.run("kubectl get certificate mattermost-tls -n mattermost -o jsonpath='{.status.conditions[?(@.type==\"Ready\")].status}'", warn=True, hide=True)
-        if cert_status.stdout.strip() == "True":
-            print("Certificate is ready!")
-            break
-        print(f"Certificate not ready yet, waiting... (attempt {i+1}/60)")
-        time.sleep(10)
-    else:
-        print("Warning: Certificate may not be ready yet, but proceeding with backup attempt")
-
-    # Create local backup directory
+    # 10.3 Backup Let's Encrypt files if they don't exist locally
     backup_dir = "./lets_encrypt_backup"
-    os.makedirs(backup_dir, exist_ok=True)
+    if not os.path.exists(backup_dir) or not os.path.exists(f"{backup_dir}/mattermost-tls-secret.yaml"):
+        print("Waiting for certificate to be ready...")
 
-    # Download Let's Encrypt certificate files
-    print("Backing up Let's Encrypt certificates...")
+        # Wait up to 10 minutes for certificate to be ready
+        for i in range(60):  # 60 attempts, 10 seconds each = 10 minutes max
+            cert_status = c.run("kubectl get certificate mattermost-tls -n mattermost -o jsonpath='{.status.conditions[?(@.type==\"Ready\")].status}'", warn=True, hide=True)
+            if cert_status.stdout.strip() == "True":
+                print("Certificate is ready!")
+                break
+            print(f"Certificate not ready yet, waiting... (attempt {i+1}/60)")
+            time.sleep(10)
+        else:
+            print("Warning: Certificate may not be ready yet, but proceeding with backup attempt")
 
-    c.run(f"mkdir -p {backup_dir}")
+        # Create remote backup directory and generate certificate files
+        c.run("mkdir -p ~/lets_encrypt_backup")
+        c.run("kubectl get secret mattermost-tls -n mattermost -o yaml > ~/lets_encrypt_backup/mattermost-tls-secret.yaml")
+        c.run("kubectl get secret letsencrypt-prod -n cert-manager -o yaml > ~/lets_encrypt_backup/letsencrypt-prod-secret.yaml", warn=True)
+        c.run("kubectl get clusterissuer letsencrypt-prod -o yaml > ~/lets_encrypt_backup/letsencrypt-prod-clusterissuer.yaml")
 
-    # Get the secret name and download the TLS secret
-    c.run(
-        f"kubectl get secret mattermost-tls -n mattermost -o yaml > ~/{backup_dir}/mattermost-tls-secret.yaml"
-    )
-    c.rsync_download("~/mattermost-tls-secret.yaml", f"{backup_dir}/mattermost-tls-secret.yaml", "remote")
+        # Download all backup files with one rsync call
+        os.makedirs(backup_dir, exist_ok=True)
+        c.rsync_download("~/lets_encrypt_backup/", backup_dir, "remote")
 
-    # Download the Let's Encrypt account key and other cert-manager secrets
-    c.run(
-        f"kubectl get secret letsencrypt-prod -n cert-manager -o yaml > ~/{backup_dir}/letsencrypt-prod-secret.yaml",
-        warn=True,
-    )
-    c.rsync_download("~/letsencrypt-prod-secret.yaml", f"{backup_dir}/letsencrypt-prod-secret.yaml", "remote", warn=True)
-
-    # Download cluster issuer configuration
-    c.run(f"kubectl get clusterissuer letsencrypt-prod -o yaml > ~/{backup_dir}/letsencrypt-prod-clusterissuer.yaml")
-    c.rsync_download("~/letsencrypt-prod-clusterissuer.yaml", f"{backup_dir}/letsencrypt-prod-clusterissuer.yaml", "remote")
-
-    # TODO-AIDER:
-    # - a) download the content of backup_dir with one rsync call
-    # - b) check if the certificate backup on the local machine already exists, and if it does use c.rsync_upload to upload the files to the remote machine with one rsync_call
-    # - c) convert the bash script for restoring certificates to corresponding c.run(...) commands and execute them on the remote machine if applicable
-    # - d) if the certificate backup on the local machine already does not exist then generate a new one (as it is currently implemented)
-    # Note: Steps b, c, d have to be executed somewhere above (not here)
-    # the restore_script-related logic can be deleted
-
-    restore_script = dedent(f"""#!/bin/bash
-    # Script to restore Let's Encrypt certificates
-    # Run this before applying the ingress configuration
-
-    echo "Restoring Let's Encrypt certificates..."
-
-    # Apply the cluster issuer first (tells cert-manager how to communicate with Let's Encrypt)
-    # Contains the ACME server URL, your email, and challenge solver configuration
-    # Does NOT trigger new certificate requests - it just sets up the issuer for future use
-
-    kubectl apply -f letsencrypt-prod-clusterissuer.yaml
-
-    # Wait a moment for cert-manager to be ready
-    sleep 5
-
-    # Apply the account secret
-    # (Restores the Let's Encrypt account private key)
-    # Critical for avoiding rate limits - without this, cert-manager would create a
-    # new account and potentially hit duplicate certificate limits
-
-    kubectl apply -f letsencrypt-prod-secret.yaml
-
-    # Apply the TLS secret
-    # Restores the actual TLS certificate and private key
-    # (the mattermost-tls secret in mattermost namespace)
-    # This contains the SSL certificate that nginx uses to serve HTTPS traffic
-    # Immediately enables HTTPS without waiting for certificate generation
-
-    kubectl apply -f mattermost-tls-secret.yaml
-
-    echo "Certificates restored. You can now apply your ingress configuration."
-    """)
-
-    with open(f"{backup_dir}/restore_certificates.sh", "w") as f:
-        f.write(restore_script)
-
-    print(f"Let's Encrypt certificates backed up to {backup_dir}/")
-    print(f"To restore certificates on a fresh installation, run: bash {backup_dir}/restore_certificates.sh")
+        print(f"Let's Encrypt certificates backed up to {backup_dir}/")
+    else:
+        print("Certificate backup already exists locally, skipping backup creation")
 
     # 10.4 Access Mattermost
     # Navigate to https://chat.yourdomain.com and create your admin account.
