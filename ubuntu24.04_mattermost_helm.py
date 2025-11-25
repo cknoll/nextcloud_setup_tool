@@ -65,7 +65,6 @@ c.run(f"echo hello new vm with os:")
 res = c.run(f"lsb_release -a")
 
 
-
 # ssh key handling:
 
 # remove from known_hosts:
@@ -74,8 +73,6 @@ res = c.run(f"lsb_release -a")
 # add keys
 # f"ssh-keyscan {config("remote")} >> ~/.ssh/known_hosts"
 # f"ssh-keyscan -t ed25519 {config("remote")} >> ~/.ssh/known_hosts"
-
-
 
 
 def install_starship_tmux_mc(c: du.StateConnection):
@@ -489,19 +486,33 @@ def install_mattermost_with_helm(c: du.StateConnection):
     # Download Let's Encrypt certificate files
     print("Backing up Let's Encrypt certificates...")
 
+    c.run(f"mkdir -p {backup_dir}")
+
     # Get the secret name and download the TLS secret
-    c.run("kubectl get secret mattermost-tls -n mattermost -o yaml > ~/mattermost-tls-secret.yaml")
+    c.run(
+        f"kubectl get secret mattermost-tls -n mattermost -o yaml > ~/{backup_dir}/mattermost-tls-secret.yaml"
+    )
     c.rsync_download("~/mattermost-tls-secret.yaml", f"{backup_dir}/mattermost-tls-secret.yaml", "remote")
 
     # Download the Let's Encrypt account key and other cert-manager secrets
-    c.run("kubectl get secret letsencrypt-prod -n cert-manager -o yaml > ~/letsencrypt-prod-secret.yaml", warn=True)
+    c.run(
+        f"kubectl get secret letsencrypt-prod -n cert-manager -o yaml > ~/{backup_dir}/letsencrypt-prod-secret.yaml",
+        warn=True,
+    )
     c.rsync_download("~/letsencrypt-prod-secret.yaml", f"{backup_dir}/letsencrypt-prod-secret.yaml", "remote", warn=True)
 
     # Download cluster issuer configuration
-    c.run("kubectl get clusterissuer letsencrypt-prod -o yaml > ~/letsencrypt-prod-clusterissuer.yaml")
+    c.run(f"kubectl get clusterissuer letsencrypt-prod -o yaml > ~/{backup_dir}/letsencrypt-prod-clusterissuer.yaml")
     c.rsync_download("~/letsencrypt-prod-clusterissuer.yaml", f"{backup_dir}/letsencrypt-prod-clusterissuer.yaml", "remote")
 
-    # Create a restore script for future use
+    # TODO-AIDER:
+    # - a) download the content of backup_dir with one rsync call
+    # - b) check if the certificate backup on the local machine already exists, and if it does use c.rsync_upload to upload the files to the remote machine with one rsync_call
+    # - c) convert the bash script for restoring certificates to corresponding c.run(...) commands and execute them on the remote machine if applicable
+    # - d) if the certificate backup on the local machine already does not exist then generate a new one (as it is currently implemented)
+    # Note: Steps b, c, d have to be executed somewhere above (not here)
+    # the restore_script-related logic can be deleted
+
     restore_script = dedent(f"""#!/bin/bash
     # Script to restore Let's Encrypt certificates
     # Run this before applying the ingress configuration
