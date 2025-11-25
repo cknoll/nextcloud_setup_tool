@@ -199,22 +199,39 @@ def install_mattermost_with_helm(c: du.StateConnection):
 
     # Check if certificate backup exists locally and restore if available
     backup_dir = "./lets_encrypt_backup"
+    # TODO: refactor hardcoded file names
+
     if os.path.exists(backup_dir) and os.path.exists(f"{backup_dir}/mattermost-tls-secret.yaml"):
         print("Found existing certificate backup, uploading and restoring...")
-        
+
         # Upload backup files to remote
-        c.rsync_upload(f"{backup_dir}/", "~/lets_encrypt_backup/", "remote")
-        
-        # Restore certificates on remote machine
-        c.run("kubectl apply -f ~/lets_encrypt_backup/letsencrypt-prod-clusterissuer.yaml")
+        c.rsync_upload(f"{backup_dir}/", f"~/{backup_dir}/", "remote")
+
+        # Restore certificates on remote machine (3 steps)
+
+        # Apply the cluster issuer first (tells cert-manager how to communicate with Let's Encrypt)
+        # Contains the ACME server URL, your email, and challenge solver configuration
+        # Does NOT trigger new certificate requests - it just sets up the issuer for future use
+        c.run(f"kubectl apply -f ~/{backup_dir}/letsencrypt-prod-clusterissuer.yaml")
         c.run("sleep 5")  # Wait for cert-manager to be ready
-        c.run("kubectl apply -f ~/lets_encrypt_backup/letsencrypt-prod-secret.yaml")
-        c.run("kubectl apply -f ~/lets_encrypt_backup/mattermost-tls-secret.yaml")
-        
+
+        # Apply the account secret
+        # (Restores the Let's Encrypt account private key)
+        # Critical for avoiding rate limits - without this, cert-manager would create a
+        # new account and potentially hit duplicate certificate limits
+        c.run(f"kubectl apply -f ~/{backup_dir}/letsencrypt-prod-secret.yaml")
+
+        # Apply the TLS secret
+        # Restores the actual TLS certificate and private key
+        # (the mattermost-tls secret in mattermost namespace)
+        # This contains the SSL certificate that nginx uses to serve HTTPS traffic
+        # Immediately enables HTTPS without waiting for certificate generation
+        c.run(f"kubectl apply -f ~/{backup_dir}/mattermost-tls-secret.yaml")
+
         print("Certificates restored from backup.")
     else:
         print("No certificate backup found, will generate new certificates...")
-        
+
         cluster_issuer = dedent(f"""
         apiVersion: cert-manager.io/v1
         kind: ClusterIssuer
@@ -479,7 +496,7 @@ def install_mattermost_with_helm(c: du.StateConnection):
     c.run("kubectl logs -n mattermost deployment/postgres")
 
     # 10.3 Backup Let's Encrypt files if they don't exist locally
-    backup_dir = "./lets_encrypt_backup"
+    # (see definition of backup_dir above)
     if not os.path.exists(backup_dir) or not os.path.exists(f"{backup_dir}/mattermost-tls-secret.yaml"):
         print("Waiting for certificate to be ready...")
 
@@ -495,14 +512,14 @@ def install_mattermost_with_helm(c: du.StateConnection):
             print("Warning: Certificate may not be ready yet, but proceeding with backup attempt")
 
         # Create remote backup directory and generate certificate files
-        c.run("mkdir -p ~/lets_encrypt_backup")
-        c.run("kubectl get secret mattermost-tls -n mattermost -o yaml > ~/lets_encrypt_backup/mattermost-tls-secret.yaml")
-        c.run("kubectl get secret letsencrypt-prod -n cert-manager -o yaml > ~/lets_encrypt_backup/letsencrypt-prod-secret.yaml", warn=True)
-        c.run("kubectl get clusterissuer letsencrypt-prod -o yaml > ~/lets_encrypt_backup/letsencrypt-prod-clusterissuer.yaml")
+        c.run(f"mkdir -p ~/{backup_dir}")
+        c.run(f"kubectl get secret mattermost-tls -n mattermost -o yaml > ~/{backup_dir}/mattermost-tls-secret.yaml")
+        c.run(f"kubectl get secret letsencrypt-prod -n cert-manager -o yaml > ~/{backup_dir}/letsencrypt-prod-secret.yaml", warn=True)
+        c.run(f"kubectl get clusterissuer letsencrypt-prod -o yaml > ~/{backup_dir}/letsencrypt-prod-clusterissuer.yaml")
 
         # Download all backup files with one rsync call
         os.makedirs(backup_dir, exist_ok=True)
-        c.rsync_download("~/lets_encrypt_backup/", backup_dir, "remote")
+        c.rsync_download(f"~/{backup_dir}/", backup_dir, "remote")
 
         print(f"Let's Encrypt certificates backed up to {backup_dir}/")
     else:
